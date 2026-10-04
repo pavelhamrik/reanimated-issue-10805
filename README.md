@@ -26,16 +26,32 @@ beyond `babel-preset-expo`.
 
 ## Steps
 
-1. Tap **Fade in, then stall JS** — the box fades in, then 400 ms later the JS thread busy-waits
-   for 3 s (so no GC tick can run while the settled value is 1–2 s old).
+1. Tap **Remount: fade in, then stall JS** — a fresh box mounts and fades in; 400 ms later the JS
+   thread busy-waits for 3 s (so no GC tick can run while the settled value is 1–2 s old).
 2. Wait for the log line `JS thread: stalled 3000 ms …`.
-3. Tap **Re-render**.
+3. Tap **Re-render** (a `useState` bump in the parent).
 
 **Actual:** the green box disappears. The log shows the shared value still reads `1`.
 
 **Expected:** the box stays visible — nothing changed the animated value.
 
-**Control:** tap **Fade in (no stall)**, wait 2 s, tap **Re-render** — the box stays.
+**Control:** **Remount: fade in (no stall)**, wait 2 s, **Re-render** — the box stays.
+
+<img src="docs/after-stall-rerender.png" width="320" alt="After the stall and a re-render: the log shows the shared value settled at 1, the JS thread stalled 3000 ms, and the re-render reading 1 — and the bottom of the screen, where the green box sits, is blank." />
+
+Verified on the iOS 27.0 simulator (iPhone 17), Debug build + dev bundle, Xcode 27.0: fails 2/2,
+control passes. The original sighting was a Release build on an iPhone 16 Pro Max / iOS 27.0,
+where a background launch (an App Intent under UIScene) delays JS timers by 5–11 s — the same
+window, no synthetic stall needed.
+
+### Why the box has to be remounted
+
+`settledProps` is state on the `AnimatedComponent` instance
+(`createAnimatedComponent/AnimatedComponent.tsx` › `_syncStylePropsBackToReact`) and is never
+reverted, so once any settle of a prop has been handed back, every later render re-sends that value.
+Only the **first** settle of a prop on a fresh component is exposed — which is why real apps meet
+this on cold start (chrome fading in while the JS thread is busy), and why a scenario here starts
+with a fresh box.
 
 ## Workaround
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated, {
   runOnJS,
@@ -16,6 +16,10 @@ import Animated, {
 // window and the next tick evicts the entry before collecting it; the next React
 // render then re-sends the component's INITIAL animated style (opacity 0 here)
 // and nothing overrides it.
+//
+// Only the FIRST settle of a fresh component is exposed: once any settle has been
+// handed back, `settledProps` (component state) keeps re-sending it. That is why
+// the box is remounted per scenario — and why real apps hit this on cold start.
 
 const STALL_MS = 3000;
 const STALL_AFTER_MS = 400; // the fade lasts 150 ms, so the value has settled by then
@@ -27,58 +31,73 @@ function stallJs(ms: number) {
   }
 }
 
-export default function App() {
+type Log = (line: string) => void;
+
+function Box({ stall, renders, log }: { stall: boolean; renders: number; log: Log }) {
   const opacity = useSharedValue(0);
-  const [renders, setRenders] = useState(0);
-  const [log, setLog] = useState<string[]>([]);
-  const append = useCallback((line: string) => setLog((l) => [...l, line]), []);
+
+  useEffect(() => {
+    log(`box mounted (${stall ? 'stall' : 'no stall'}); fading in`);
+    opacity.value = withTiming(1, { duration: 150 });
+    if (!stall) return;
+    const id = setTimeout(() => {
+      stallJs(STALL_MS);
+      log(`JS thread: stalled ${STALL_MS} ms from +${STALL_AFTER_MS} ms`);
+    }, STALL_AFTER_MS);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Proves the animation ran to completion on the UI thread.
   useAnimatedReaction(
     () => opacity.value,
     (value, previous) => {
-      if (value === 1 && previous !== 1) runOnJS(append)('UI thread: shared value settled at 1');
+      if (value === 1 && previous !== 1) runOnJS(log)('UI thread: shared value settled at 1');
     }
   );
 
+  // Logs each Re-render tap with the shared value as JS reads it.
+  const mountRenders = useRef(renders);
+  useEffect(() => {
+    if (renders === mountRenders.current) return;
+    log(`re-render #${renders}: shared value reads ${opacity.value}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [renders]);
+
   const animatedStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
 
-  const fadeIn = useCallback(
-    (stall: boolean) => {
-      opacity.value = 0;
-      opacity.value = withTiming(1, { duration: 150 });
-      if (stall) {
-        setTimeout(() => {
-          stallJs(STALL_MS);
-          append(`JS thread: stalled ${STALL_MS} ms starting at +${STALL_AFTER_MS} ms`);
-        }, STALL_AFTER_MS);
-      }
-    },
-    [append, opacity]
+  return (
+    <Animated.View style={[styles.box, animatedStyle]} testID="box">
+      <Text style={styles.boxText}>animated opacity → I should stay visible</Text>
+    </Animated.View>
   );
+}
 
-  // Fade the box in at mount, as an app does with its chrome.
-  useEffect(() => {
-    fadeIn(false);
-  }, [fadeIn]);
+export default function App() {
+  const [boxKey, setBoxKey] = useState(0);
+  const [stall, setStall] = useState(false);
+  const [renders, setRenders] = useState(0);
+  const [log, setLog] = useState<string[]>([]);
+  const append = useCallback<Log>((line) => setLog((l) => [...l, line]), []);
 
-  const rerender = () => {
-    setRenders((r) => r + 1);
-    append(`JS thread: re-render; shared value reads ${opacity.value}`);
+  const mount = (withStall: boolean) => {
+    setLog([]);
+    setStall(withStall);
+    setBoxKey((k) => k + 1);
   };
 
   return (
     <View style={styles.root}>
       <Text style={styles.title}>reanimated#10805</Text>
       <Text style={styles.hint}>
-        1. Tap "Fade in, then stall JS". Wait ~4 s for the stall to finish.{'\n'}
+        1. Tap "Remount: fade in, then stall JS". Wait for the "stalled" log line (~4 s).{'\n'}
         2. Tap "Re-render". The green box disappears although the shared value reads 1.{'\n'}
-        Control: "Fade in (no stall)" then "Re-render" keeps the box.
+        Control: "Remount: fade in (no stall)", wait 2 s, "Re-render" — the box stays.
       </Text>
 
-      <Button label="Fade in (no stall)" onPress={() => fadeIn(false)} />
-      <Button label="Fade in, then stall JS" onPress={() => fadeIn(true)} />
-      <Button label={`Re-render (${renders})`} onPress={rerender} />
+      <Button label="Remount: fade in (no stall)" onPress={() => mount(false)} />
+      <Button label="Remount: fade in, then stall JS" onPress={() => mount(true)} />
+      <Button label={`Re-render (${renders})`} onPress={() => setRenders((r) => r + 1)} />
 
       <View style={styles.log}>
         {log.map((line, i) => (
@@ -88,9 +107,7 @@ export default function App() {
         ))}
       </View>
 
-      <Animated.View style={[styles.box, animatedStyle]} testID="box">
-        <Text style={styles.boxText}>animated opacity → I should stay visible</Text>
-      </Animated.View>
+      <Box key={boxKey} stall={stall} renders={renders} log={append} />
     </View>
   );
 }
