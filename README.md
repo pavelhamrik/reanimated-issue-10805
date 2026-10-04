@@ -20,7 +20,9 @@ npx expo run:ios      # iOS simulator; a device works too
 ```
 
 Expo SDK 57 · react-native 0.86.3 · react-native-reanimated 4.5.1 · react-native-worklets 0.10.1 ·
-New Architecture · Hermes. No feature flags changed, no babel config beyond `babel-preset-expo`.
+New Architecture · Hermes · UIScene lifecycle (`expo-build-properties` › `enableSceneSupport`, which the
+iOS 27 SDK in Xcode 27 requires to launch at all). No Reanimated feature flags changed, no babel config
+beyond `babel-preset-expo`.
 
 ## Steps
 
